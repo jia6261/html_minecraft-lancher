@@ -1,0 +1,388 @@
+import React, { useState, useEffect, useCallback } from 'react';
+import { 
+  Play, 
+  Download, 
+  Settings, 
+  User, 
+  Box, 
+  Bell, 
+  ChevronRight, 
+  X, 
+  Square, 
+  Minus,
+  Cpu,
+  FolderOpen,
+  RefreshCw,
+  AlertCircle,
+  Activity
+} from 'lucide-react';
+
+// 后端 API 配置
+const API_BASE = "http://localhost:8080";
+
+const App = () => {
+  const [activeTab, setActiveTab] = useState('launch');
+  const [isLaunching, setIsLaunching] = useState(false);
+  const [progress, setProgress] = useState(0);
+  const [statusText, setStatusText] = useState('正在初始化...');
+  const [errorInfo, setErrorInfo] = useState(null);
+  const [isOffline, setIsOffline] = useState(false);
+  
+  const [versions, setVersions] = useState([]);
+  const [selectedVersion, setSelectedVersion] = useState('');
+  const [settings, setSettings] = useState({
+    maxMemory: 4096,
+    javaPath: 'C:/Program Files/Java/jdk-17/bin/java.exe',
+    playerName: 'Player'
+  });
+
+  // 1. 实现具有重试限制和静默失败机制的版本获取逻辑
+  const fetchVersions = useCallback(async (retryCount = 0) => {
+    // 只有在第一次尝试或手动刷新时才显示“正在同步”
+    if (retryCount === 0) {
+      setErrorInfo(null);
+      setStatusText('正在同步游戏版本...');
+    }
+    
+    try {
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 2000); // 降低超时时间，提高响应感
+
+      const response = await fetch(`${API_BASE}/get_versions`, {
+        signal: controller.signal,
+        headers: {
+          'Accept': 'application/json'
+        }
+      });
+      
+      clearTimeout(timeoutId);
+
+      if (!response.ok) throw new Error(`服务器返回错误: ${response.status}`);
+      
+      const data = await response.json();
+      const versionList = data.versions || [];
+      
+      setVersions(versionList);
+      setIsOffline(false);
+      if (versionList.length > 0 && !selectedVersion) {
+        setSelectedVersion(versionList[0]);
+      }
+      setStatusText('后端连接正常');
+    } catch (error) {
+      // 只有在最后一次重试失败后才更新 UI 为错误状态
+      if (retryCount < 1) {
+        setTimeout(() => fetchVersions(retryCount + 1), 1000);
+      } else {
+        setIsOffline(true);
+        setErrorInfo("无法连接到本地后端。请运行编译好的 server.exe 程序。");
+        setStatusText('已进入离线预览模式');
+        
+        // 加载演示数据，防止 UI 为空
+        const demoVersions = ['1.21.1', '1.20.4', '1.16.5'];
+        setVersions(demoVersions);
+        if (!selectedVersion) setSelectedVersion(demoVersions[0]);
+      }
+    }
+  }, [selectedVersion]);
+
+  useEffect(() => {
+    fetchVersions();
+  }, [fetchVersions]);
+
+  // 2. 改进后的启动逻辑：后端不通时平滑切换到演示动画
+  const handleLaunch = async () => {
+    setIsLaunching(true);
+    setStatusText('正在准备启动...');
+    setProgress(5);
+
+    try {
+      const response = await fetch(`${API_BASE}/launch`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          version: selectedVersion,
+          playerName: settings.playerName,
+          maxMemory: settings.maxMemory,
+          javaPath: settings.javaPath
+        }),
+        mode: 'cors'
+      });
+
+      if (response.ok) {
+        setStatusText('后端已接收请求...');
+        animateProgress(100, 100, '游戏启动成功');
+      } else {
+        throw new Error('Backend failed');
+      }
+    } catch (error) {
+      // 后端连接失败时，运行模拟启动动画，不中断用户体验
+      console.log("进入演示启动模式...");
+      simulateLaunchAnimation();
+    }
+  };
+
+  const animateProgress = (target, speed, finalMsg) => {
+    let p = progress;
+    const interval = setInterval(() => {
+      p += 2;
+      setProgress(p);
+      if (p >= target) {
+        clearInterval(interval);
+        setTimeout(() => {
+          setIsLaunching(false);
+          setStatusText(finalMsg);
+        }, 800);
+      }
+    }, speed);
+  };
+
+  const simulateLaunchAnimation = () => {
+    let p = 5;
+    const interval = setInterval(() => {
+      p += 2;
+      setProgress(p);
+      if (p === 30) setStatusText('正在检查 Java 环境 (模拟)...');
+      if (p === 60) setStatusText('正在校验游戏核心 (模拟)...');
+      if (p === 90) setStatusText('准备就绪...');
+      if (p >= 100) {
+        clearInterval(interval);
+        setTimeout(() => {
+          setIsLaunching(false);
+          setStatusText('已完成模拟启动序列');
+        }, 800);
+      }
+    }, 40);
+  };
+
+  const renderContent = () => {
+    switch (activeTab) {
+      case 'launch':
+        return (
+          <div className="space-y-6 animate-in fade-in duration-300">
+            {isOffline && (
+              <div className="bg-amber-50 border border-amber-200 p-4 rounded-xl flex items-start space-x-3 text-amber-800 shadow-sm">
+                <AlertCircle className="shrink-0 mt-0.5" size={18} />
+                <div className="text-sm">
+                  <p className="font-bold">本地服务未就绪</p>
+                  <p className="opacity-80">当前处于演示预览状态。请确保你的 C++ 后端已在 8080 端口运行并开启了跨域支持。</p>
+                </div>
+              </div>
+            )}
+            
+            <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-5">
+              <div className="flex justify-between items-center mb-4 text-gray-700">
+                <h3 className="font-bold flex items-center italic text-sm">
+                  <Bell size={16} className="mr-2 text-blue-500" />
+                  系统控制台输出
+                </h3>
+                <button 
+                  onClick={() => fetchVersions()} 
+                  className="p-1.5 hover:bg-gray-100 rounded-lg transition-colors text-gray-400 hover:text-blue-500"
+                  title="刷新连接"
+                >
+                  <RefreshCw size={14} />
+                </button>
+              </div>
+              <div className="p-4 bg-zinc-900 rounded-lg text-[11px] font-mono text-zinc-400 border border-zinc-800 leading-relaxed shadow-inner overflow-hidden">
+                <p className="text-zinc-500">// {new Date().toLocaleTimeString()} Session Start</p>
+                <p><span className="text-blue-400">INFO:</span> 目标 API: {API_BASE}</p>
+                <p><span className={isOffline ? 'text-amber-400' : 'text-green-400'}>STATUS:</span> {statusText}</p>
+                {isOffline && <p className="text-zinc-600">WARNING: 正在使用本地缓存数据进行渲染</p>}
+              </div>
+            </div>
+            
+            <div className="grid grid-cols-2 gap-4">
+              <div className="bg-white p-6 rounded-2xl border border-gray-100 shadow-sm group">
+                <p className="text-[10px] font-black text-gray-300 uppercase tracking-widest mb-1 group-hover:text-blue-400 transition-colors">Connection State</p>
+                <p className={`text-2xl font-black ${isOffline ? 'text-amber-500' : 'text-zinc-700'}`}>
+                  {isOffline ? 'DEMO MODE' : 'STABLE'}
+                </p>
+              </div>
+              <div className="bg-white p-6 rounded-2xl border border-gray-100 shadow-sm group text-right">
+                <p className="text-[10px] font-black text-gray-300 uppercase tracking-widest mb-1 group-hover:text-blue-400 transition-colors">Version</p>
+                <p className="text-2xl font-black text-zinc-700 italic">v1.2.0-Safe</p>
+              </div>
+            </div>
+          </div>
+        );
+      case 'settings':
+        return (
+          <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-8 animate-in slide-in-from-bottom-4 duration-300">
+            <h3 className="text-xl font-black text-gray-800 mb-8 border-b border-gray-50 pb-4">启动参数设置</h3>
+            <div className="space-y-8">
+              <div className="space-y-3">
+                <div className="flex justify-between items-end">
+                  <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest flex items-center">
+                    <Cpu size={14} className="mr-2" /> 最大内存限制 (MB)
+                  </label>
+                  <span className="text-blue-600 font-mono font-bold">{settings.maxMemory} MB</span>
+                </div>
+                <input 
+                  type="range" min="1024" max="16384" step="1024"
+                  value={settings.maxMemory}
+                  onChange={(e) => setSettings({...settings, maxMemory: parseInt(e.target.value)})}
+                  className="w-full h-1.5 bg-gray-100 rounded-full appearance-none cursor-pointer accent-blue-600"
+                />
+              </div>
+              <div className="space-y-3">
+                <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest flex items-center">
+                  <FolderOpen size={14} className="mr-2" /> Java 执行路径
+                </label>
+                <input 
+                  type="text" 
+                  value={settings.javaPath}
+                  onChange={(e) => setSettings({...settings, javaPath: e.target.value})}
+                  className="w-full bg-gray-50 border border-gray-200 p-4 rounded-xl text-xs font-mono text-gray-600 focus:bg-white focus:ring-2 ring-blue-100 outline-none transition-all"
+                />
+              </div>
+            </div>
+          </div>
+        );
+      default:
+        return (
+          <div className="flex flex-col items-center justify-center h-64 text-gray-300">
+            <Download size={48} className="mb-4 opacity-20" />
+            <p className="text-sm font-bold uppercase tracking-widest">资源获取模块暂未开放</p>
+          </div>
+        );
+    }
+  };
+
+  return (
+    <div className="flex flex-col w-full h-[640px] max-w-[960px] mx-auto bg-[#F8FAFC] text-gray-800 shadow-2xl rounded-3xl overflow-hidden border border-white relative">
+      
+      {/* 顶部标题栏 */}
+      <header className="bg-zinc-900 h-14 flex items-center justify-between px-6 text-white shrink-0 z-20">
+        <div className="flex items-center space-x-12">
+          <div className="flex items-center space-x-3">
+            <div className="bg-blue-600 p-1.5 rounded-lg">
+              <Box size={18} className="text-white" />
+            </div>
+            <span className="font-black italic text-lg tracking-tighter">MC-CONSOLE</span>
+          </div>
+          
+          <nav className="flex space-x-1 h-full pt-2">
+            {[
+              { id: 'launch', label: '控制中心', icon: Play },
+              { id: 'settings', label: '启动参数', icon: Settings }
+            ].map((item) => (
+              <button
+                key={item.id}
+                onClick={() => setActiveTab(item.id)}
+                className={`flex items-center px-5 transition-all text-[10px] font-black uppercase tracking-widest rounded-t-xl h-12 ${
+                  activeTab === item.id 
+                  ? 'bg-[#F8FAFC] text-blue-600' 
+                  : 'text-zinc-500 hover:text-white hover:bg-zinc-800'
+                }`}
+              >
+                <item.icon size={12} className="mr-2" />
+                {item.label}
+              </button>
+            ))}
+          </nav>
+        </div>
+
+        <div className="flex items-center space-x-3">
+          <div className="w-2 h-2 rounded-full bg-zinc-700"></div>
+          <div className="w-2 h-2 rounded-full bg-zinc-700"></div>
+          <div className="w-2 h-2 rounded-full bg-red-500/50"></div>
+        </div>
+      </header>
+
+      {/* 界面主体 */}
+      <div className="flex flex-1 overflow-hidden">
+        
+        <aside className="w-72 bg-white flex flex-col p-8 border-r border-gray-100 shadow-sm z-10">
+          <div className="flex flex-col items-center mb-10">
+            <div className="relative">
+              <div className="w-20 h-20 bg-blue-50 rounded-[2rem] flex items-center justify-center border border-white shadow-lg mb-4">
+                <User size={40} className="text-blue-500" />
+              </div>
+              <div className={`absolute bottom-3 right-0 w-5 h-5 rounded-full border-4 border-white shadow-sm ${isOffline ? 'bg-amber-400' : 'bg-green-500 animate-pulse'}`}></div>
+            </div>
+            <input 
+              className="text-center font-black text-lg text-gray-700 bg-transparent border-none focus:ring-0 w-full"
+              value={settings.playerName}
+              onChange={(e) => setSettings({...settings, playerName: e.target.value})}
+            />
+            <p className="text-[9px] font-black text-blue-500/50 uppercase tracking-[0.2em] mt-1">
+              {isOffline ? 'OFFLINE SESSION' : 'CONNECTED'}
+            </p>
+          </div>
+
+          <div className="space-y-6 flex-1">
+            <div className="space-y-2">
+              <label className="text-[9px] font-black text-gray-300 ml-1 uppercase tracking-widest">目标版本</label>
+              <select 
+                className="w-full bg-gray-50 border border-gray-100 p-3 rounded-xl text-xs font-bold text-gray-700 focus:bg-white focus:ring-2 ring-blue-50 outline-none cursor-pointer"
+                value={selectedVersion}
+                onChange={(e) => setSelectedVersion(e.target.value)}
+              >
+                {versions.length > 0 ? (
+                  versions.map(v => <option key={v} value={v}>{v}</option>)
+                ) : (
+                  <option>无法获取版本</option>
+                )}
+              </select>
+            </div>
+          </div>
+
+          <div className="mt-auto space-y-4">
+            <div className="px-1">
+              <div className="flex justify-between items-center mb-1">
+                <span className="text-[9px] font-bold text-gray-400 uppercase">{statusText}</span>
+                {isLaunching && <span className="text-[9px] font-mono font-bold text-blue-500">{progress}%</span>}
+              </div>
+              <div className="h-1 bg-gray-100 rounded-full overflow-hidden">
+                <div 
+                  className="h-full bg-blue-500 transition-all duration-300 rounded-full"
+                  style={{ width: `${isLaunching ? progress : 0}%` }}
+                ></div>
+              </div>
+            </div>
+
+            <button 
+              disabled={isLaunching}
+              onClick={handleLaunch}
+              className={`w-full py-4 rounded-2xl font-black text-white text-sm tracking-[0.2em] transition-all transform active:scale-95 ${
+                isLaunching 
+                ? 'bg-zinc-200 text-zinc-400 shadow-none' 
+                : 'bg-blue-600 hover:bg-blue-700 shadow-lg shadow-blue-500/20'
+              }`}
+            >
+              {isLaunching ? '启动中...' : '开始游戏'}
+            </button>
+          </div>
+        </aside>
+
+        <main className="flex-1 p-10 overflow-y-auto">
+          <div className="max-w-2xl mx-auto">
+            {renderContent()}
+          </div>
+        </main>
+      </div>
+
+      {/* 启动全屏加载蒙版 */}
+      {isLaunching && (
+        <div className="absolute inset-0 bg-zinc-900/90 backdrop-blur-md z-[100] flex flex-col items-center justify-center animate-in fade-in duration-500">
+           <div className="relative mb-10">
+             <div className="w-24 h-24 border-2 border-blue-500/20 rounded-full"></div>
+             <div className="absolute inset-0 border-t-2 border-blue-500 rounded-full animate-spin"></div>
+             <div className="absolute inset-0 flex items-center justify-center text-blue-500 font-mono font-bold text-xl">{progress}%</div>
+           </div>
+           <h2 className="text-white font-black text-2xl tracking-[0.3em] uppercase italic">{statusText}</h2>
+           <p className="text-zinc-500 text-[10px] mt-4 font-mono flex items-center">
+             <Activity size={12} className="mr-2 animate-pulse" /> LOCAL_HOST HANDSHAKING...
+           </p>
+        </div>
+      )}
+
+      <style dangerouslySetInnerHTML={{ __html: `
+        @keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
+        .animate-spin { animation: spin 1s linear infinite; }
+      `}} />
+    </div>
+  );
+};
+
+export default App;
